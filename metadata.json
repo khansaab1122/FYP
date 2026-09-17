@@ -1,0 +1,7 @@
+{
+  "name": "Smart Khata AI",
+  "description": "AI-powered digital face recognition and credit ledger management system for local retail stores.",
+  "requestFramePermissions": [  
+    "camera"
+  ]
+}

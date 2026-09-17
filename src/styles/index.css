@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@layer utilities {
+  .app-container {
+    background: radial-gradient(circle at 50% 0%, #0f172a 0%, #020617 100%) !important;
+  }
+  .glass-card {
+    background: rgba(30, 41, 59, 0.3) !important;
+    backdrop-filter: blur(16px) !important;
+    border: 1px solid rgba(255, 255, 255, 0.06) !important;
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3) !important;
+  }
+  .ai-scanner-line {
+    height: 3px;
+    background: linear-gradient(90deg, transparent, #00d2ff, transparent);
+    position: absolute;
+    width: 100%;
+    box-shadow: 0 0 20px #00d2ff;
+    animation: scanAnimation 3.5s ease-in-out infinite;
+    z-index: 10;
+  }
+  .glow-green {
+    text-shadow: 0 0 12px rgba(16, 185, 129, 0.5);
+  }
+  .glow-blue {
+    box-shadow: 0 0 25px rgba(0, 210, 255, 0.3);
+  }
+  .glow-blue-text {
+    text-shadow: 0 0 10px rgba(0, 210, 255, 0.5);
+  }
+  .sidebar-link {
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .sidebar-link:hover {
+    background: rgba(255, 255, 255, 0.04);
+    color: #00d2ff;
+  }
+  .stat-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    opacity: 0.55;
+  }
+  .data-grid-row {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  }
+}
+
+@keyframes scanAnimation {
+  0% { top: 12%; }
+  50% { top: 88%; }
+  100% { top: 12%; }
+}
