@@ -8,9 +8,10 @@ interface CustomerProfileProps {
   onTransactionAdded: () => void;
   onCustomerDeleted?: () => void;
   onClose: () => void;
+  compact?: boolean;
 }
 
-export default function CustomerProfile({ customer, onTransactionAdded, onCustomerDeleted, onClose }: CustomerProfileProps) {
+export default function CustomerProfile({ customer, onTransactionAdded, onCustomerDeleted, onClose, compact = false }: CustomerProfileProps) {
   const [modalOpen, setModalOpen] = useState(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [txType, setTxType] = useState<'credit' | 'payment'>('credit');
@@ -91,13 +92,14 @@ export default function CustomerProfile({ customer, onTransactionAdded, onCustom
   };
 
   return (
-    <div id="customer-profile" className="max-w-6xl mx-auto p-4 space-y-6">
+    <div id="customer-profile" className={compact ? 'w-full space-y-3' : 'max-w-6xl mx-auto p-4 space-y-6'}>
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <button
           onClick={onClose}
           className="flex items-center gap-2 px-3.5 py-1.5 bg-white/5 hover:bg-white/10 text-slate-300 rounded-xl transition-all font-semibold text-xs uppercase cursor-pointer border border-white/5"
         >
-          <ChevronRight className="w-4 h-4 rotate-180" /> Back to Accounts
+          {compact ? <X className="w-4 h-4" /> : <ChevronRight className="w-4 h-4 rotate-180" />}
+          {compact ? 'Close Customer' : 'Back to Accounts'}
         </button>
 
         <button
@@ -108,9 +110,9 @@ export default function CustomerProfile({ customer, onTransactionAdded, onCustom
         </button>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className={compact ? 'grid grid-cols-1 gap-3' : 'grid grid-cols-1 lg:grid-cols-3 gap-6'}>
         {/* Left Customer overview card */}
-        <div className="glass-card p-6 space-y-6">
+        <div className={`glass-card ${compact ? 'p-4 space-y-4' : 'p-6 space-y-6'}`}>
           <div className="flex flex-col items-center text-center space-y-3 pb-6 border-b border-white/5">
             <div className="relative">
               {customer.image && customer.image.length > 50 ? (
@@ -185,7 +187,7 @@ export default function CustomerProfile({ customer, onTransactionAdded, onCustom
         </div>
 
         {/* Right ledger transaction list */}
-        <div className="lg:col-span-2 glass-card p-6 space-y-5">
+        <div className={`${compact ? '' : 'lg:col-span-2'} glass-card ${compact ? 'p-4 space-y-4' : 'p-6 space-y-5'}`}>
           <div className="pb-2 border-b border-white/5">
             <h3 className="text-lg font-bold font-sans tracking-tight">Ledger Statement & Logs</h3>
             <p className="text-xs text-slate-400 mt-0.5">Chronological audit ledger of credits issued and returns resolved.</p>
@@ -249,11 +251,11 @@ export default function CustomerProfile({ customer, onTransactionAdded, onCustom
 
       {/* Credit/Payment Entry Modal overlay */}
       {modalOpen && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900/90 border border-white/10 rounded-3xl max-w-md w-full p-6 space-y-5 shadow-2xl relative backdrop-blur-xl">
+        <div className="ledger-entry-backdrop fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="ledger-entry-modal bg-slate-900/90 border border-white/10 rounded-3xl max-w-md w-full p-6 space-y-5 shadow-2xl relative backdrop-blur-xl">
             <button
               onClick={() => setModalOpen(false)}
-              className="absolute top-4 right-4 p-1.5 bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white rounded-xl transition-colors cursor-pointer"
+              className="ledger-entry-close absolute top-4 right-4 p-1.5 bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white rounded-xl transition-colors cursor-pointer"
             >
               <X className="w-4.5 h-4.5" />
             </button>
@@ -264,7 +266,7 @@ export default function CustomerProfile({ customer, onTransactionAdded, onCustom
             </div>
 
             {error && (
-              <div className="p-3 bg-red-950/30 border border-red-500/20 text-red-300 text-xs rounded-xl text-center">
+              <div className="ledger-entry-error p-3 bg-red-950/30 border border-red-500/20 text-red-300 text-xs rounded-xl text-center">
                 {error}
               </div>
             )}
@@ -276,14 +278,14 @@ export default function CustomerProfile({ customer, onTransactionAdded, onCustom
                   <button
                     type="button"
                     onClick={() => setTxType('credit')}
-                    className={`py-2.5 rounded-xl text-xs font-bold uppercase transition-all ${txType === 'credit' ? 'bg-rose-500/10 text-rose-400 border border-rose-500/30 shadow-md' : 'bg-[#111936] text-slate-400 border border-white/5 hover:text-white'}`}
+                    className={`py-2.5 rounded-xl text-xs font-bold uppercase transition-all ${txType === 'credit' ? 'bg-rose-500/10 text-rose-400 border border-rose-500/30 shadow-md' : 'ledger-entry-toggle bg-[#111936] text-slate-400 border border-white/5 hover:text-white'}`}
                   >
                     <Plus className="w-3.5 h-3.5 inline mr-1" /> Credit
                   </button>
                   <button
                     type="button"
                     onClick={() => setTxType('payment')}
-                    className={`py-2.5 rounded-xl text-xs font-bold uppercase transition-all ${txType === 'payment' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 shadow-md' : 'bg-[#111936] text-slate-400 border border-white/5 hover:text-white'}`}
+                    className={`py-2.5 rounded-xl text-xs font-bold uppercase transition-all ${txType === 'payment' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 shadow-md' : 'ledger-entry-toggle bg-[#111936] text-slate-400 border border-white/5 hover:text-white'}`}
                   >
                     <Minus className="w-3.5 h-3.5 inline mr-1" /> Payment
                   </button>

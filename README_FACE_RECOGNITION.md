@@ -1,6 +1,6 @@
 # Smart Khata AI — Final Face Recognition Integration
 
-Smart Khata AI now uses a **local Python computer-vision service** for face verification. Gemini is not required for face recognition.
+Smart Khata AI uses a **local Python computer-vision service** for face verification.
 
 ## Technology
 

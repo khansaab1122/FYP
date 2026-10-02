@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import base64
 import os
-from threading import Lock
 from pathlib import Path
+from threading import Lock
 from typing import Any
-
 import cv2
 import numpy as np
 from fastapi import FastAPI, HTTPException
@@ -64,7 +63,7 @@ def detector():
     return _detector, _recognizer
 
 
-def get_face(image: np.ndarray) -> tuple[np.ndarray, np.ndarray] | None:
+def get_faces(image: np.ndarray) -> list[tuple[np.ndarray, np.ndarray]]:
     # OpenCV's YuNet and SFace instances keep mutable internal DNN state.
     # Serialize access because FastAPI can process camera frames concurrently.
     with _model_lock:
@@ -73,12 +72,14 @@ def get_face(image: np.ndarray) -> tuple[np.ndarray, np.ndarray] | None:
         det.setInputSize((width, height))
         _, faces = det.detect(image)
         if faces is None or len(faces) == 0:
-            return None
-        # Highest detector score is normally the clearest/largest face.
-        face = max(faces, key=lambda row: float(row[-1]))
-        aligned = rec.alignCrop(image, face)
-        feature = rec.feature(aligned)
-        return feature, face
+            return []
+
+        results = []
+        for face in faces:
+            aligned = rec.alignCrop(image, face)
+            feature = rec.feature(aligned)
+            results.append((feature, face))
+        return results
 
 
 def cosine_similarity(rec, a: np.ndarray, b: np.ndarray) -> float:
@@ -92,64 +93,98 @@ def verify(req: VerifyRequest) -> dict[str, Any]:
             "matchFound": False,
             "matchedCustomerId": None,
             "confidenceScore": 0,
+            "detectedFaceCount": 0,
+            "faces": [],
+            "matchedCustomers": [],
             "analysis": "No registered customer face references were found.",
             "engine": "OpenCV YuNet + SFace",
         }
 
     det, rec = detector()
     captured = decode_image(req.image)
-    captured_face = get_face(captured)
-    if captured_face is None:
+    captured_faces = get_faces(captured)
+    if not captured_faces:
         return {
             "matchFound": False,
             "matchedCustomerId": None,
             "confidenceScore": 0,
-            "analysis": "No face detected. Keep one face clearly visible in the camera frame.",
+            "detectedFaceCount": 0,
+            "faces": [],
+            "matchedCustomers": [],
+            "analysis": "No face detected. Keep faces clearly visible in the camera frame.",
             "engine": "OpenCV YuNet + SFace",
         }
 
-    captured_feature, _ = captured_face
-    best_id = None
-    best_score = -1.0
+    reference_features = []
     valid_count = 0
-
     for ref in req.references:
         try:
             reference = decode_image(ref.image)
-            reference_face = get_face(reference)
-            if reference_face is None:
+            reference_faces = get_faces(reference)
+            if not reference_faces:
                 continue
-            reference_feature, _ = reference_face
-            score = cosine_similarity(rec, captured_feature, reference_feature)
+            reference_feature, _ = max(reference_faces, key=lambda item: float(item[1][-1]))
+            reference_features.append((ref.customerId, reference_feature))
             valid_count += 1
-            if score > best_score:
-                best_score = score
-                best_id = ref.customerId
         except Exception:
             continue
 
-    if valid_count == 0 or best_id is None:
+    if valid_count == 0:
         return {
             "matchFound": False,
             "matchedCustomerId": None,
             "confidenceScore": 0,
+            "detectedFaceCount": len(captured_faces),
+            "faces": [],
+            "matchedCustomers": [],
             "analysis": "Registered face images could not be processed. Re-register a clear face photo.",
             "engine": "OpenCV YuNet + SFace",
         }
 
-    # SFace cosine threshold 0.363 is the commonly documented same-identity threshold.
-    matched = best_score >= THRESHOLD
-    confidence = max(0, min(100, round(best_score * 100)))
+    detected_results = []
+    for index, (captured_feature, face) in enumerate(captured_faces):
+        best_id = None
+        best_score = -1.0
+        for customer_id, reference_feature in reference_features:
+            score = cosine_similarity(rec, captured_feature, reference_feature)
+            if score > best_score:
+                best_score = score
+                best_id = customer_id
+
+        matched = best_id is not None and best_score >= THRESHOLD
+        confidence = max(0, min(100, round(best_score * 100)))
+        detected_results.append({
+            "faceIndex": index,
+            "matchedCustomerId": best_id if matched else None,
+            "matchFound": matched,
+            "confidenceScore": confidence,
+            "similarityScore": round(best_score, 4),
+            "boundingBox": [int(value) for value in face[:4]],
+        })
+
+    matched_results = [result for result in detected_results if result["matchFound"]]
+    best_result = max(matched_results or detected_results, key=lambda result: result["similarityScore"])
+    matched = bool(matched_results)
     return {
         "matchFound": matched,
-        "matchedCustomerId": best_id if matched else None,
-        "confidenceScore": confidence,
-        "similarityScore": round(best_score, 4),
+        "matchedCustomerId": best_result["matchedCustomerId"],
+        "confidenceScore": best_result["confidenceScore"],
+        "similarityScore": best_result["similarityScore"],
         "threshold": THRESHOLD,
+        "detectedFaceCount": len(detected_results),
+        "matchedCustomers": [
+            {
+                "customerId": result["matchedCustomerId"],
+                "confidenceScore": result["confidenceScore"],
+                "boundingBox": result["boundingBox"],
+            }
+            for result in matched_results
+        ],
+        "faces": detected_results,
         "analysis": (
-            "Face matched with the registered customer using OpenCV SFace embeddings."
+            f"{len(matched_results)} of {len(detected_results)} faces matched using OpenCV SFace embeddings."
             if matched
-            else "No reliable face match was found. Use a clear, front-facing image or register a better reference."
+            else f"Detected {len(detected_results)} faces, but no reliable face match was found."
         ),
         "engine": "OpenCV YuNet + SFace",
     }

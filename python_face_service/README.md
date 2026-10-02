@@ -1,6 +1,6 @@
 # Smart Khata AI — Python Face Recognition
 
-This service provides offline face verification for Smart Khata AI. It does not use Gemini or any cloud AI API.
+This service provides offline face verification for Smart Khata AI using local computer-vision models.
 
 ## Engine
 
@@ -38,7 +38,7 @@ Health check: `http://127.0.0.1:8001/health`
 }
 ```
 
-The response contains `matchFound`, `matchedCustomerId`, `confidenceScore`, `similarityScore`, and the recognition engine.
+The response contains the backward-compatible best-match fields `matchFound`, `matchedCustomerId`, `confidenceScore`, and `similarityScore`. For multi-face frames, `detectedFaceCount` reports the number of detected faces and `faces` contains one result per detected face, including its `boundingBox`, match status, matched customer ID, and similarity score.
 
 ## Important
 

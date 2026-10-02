@@ -7,10 +7,29 @@ interface DashboardProps {
   session: UserSession;
   customers: Customer[];
   onCustomerSelected: (customer: Customer) => void;
+  onCustomersSelected: (customers: Customer[]) => void;
   onRefreshData: () => void;
 }
 
-export default function Dashboard({ session, customers, onCustomerSelected, onRefreshData }: DashboardProps) {
+interface FaceVerificationFace {
+  faceIndex: number;
+  matchedCustomerId: string | null;
+  matchFound: boolean;
+  confidenceScore: number;
+  boundingBox: [number, number, number, number];
+}
+
+interface MatchedCustomerResult {
+  customerId: string;
+  confidenceScore: number;
+  boundingBox: [number, number, number, number];
+}
+
+interface FaceScanResult extends FaceVerificationFace {
+  customer: Customer | null;
+}
+
+export default function Dashboard({ session, customers, onCustomerSelected, onCustomersSelected, onRefreshData }: DashboardProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [showAddForm, setShowAddForm] = useState(false);
 
@@ -20,6 +39,8 @@ export default function Dashboard({ session, customers, onCustomerSelected, onRe
   const [newCustAddress, setNewCustAddress] = useState('');
   const [newCustLimit, setNewCustLimit] = useState('25000');
   const [newCustImg, setNewCustImg] = useState(''); // Base64 data
+  const [customerSaveError, setCustomerSaveError] = useState('');
+  const [isSavingCustomer, setIsSavingCustomer] = useState(false);
 
   // Add Customer Camera States
   const [regCameraActive, setRegCameraActive] = useState(false);
@@ -33,6 +54,7 @@ export default function Dashboard({ session, customers, onCustomerSelected, onRe
   const [scannerMsg, setScannerMsg] = useState('');
   const [matchedCustomer, setMatchedCustomer] = useState<Customer | null>(null);
   const [confidence, setConfidence] = useState(0);
+  const [faceResults, setFaceResults] = useState<FaceScanResult[]>([]);
   const [awaitingConfirmation, setAwaitingConfirmation] = useState(false);
   const [verificationBlocked, setVerificationBlocked] = useState(false);
 
@@ -129,6 +151,7 @@ export default function Dashboard({ session, customers, onCustomerSelected, onRe
   // Turn on webcam
   const startCamera = async () => {
     setMatchedCustomer(null);
+    setFaceResults([]);
     setVerificationBlocked(false);
     setScannerStatus('scanning');
     setScannerMsg('Launching live camera scan...');
@@ -154,6 +177,7 @@ export default function Dashboard({ session, customers, onCustomerSelected, onRe
     }
     setCameraActive(false);
     setMatchedCustomer(null);
+    setFaceResults([]);
     setAwaitingConfirmation(false);
     setVerificationBlocked(false);
     setScannerStatus('idle');
@@ -246,8 +270,47 @@ export default function Dashboard({ session, customers, onCustomerSelected, onRe
         throw new Error(response?.error || response?.analysis || 'Server matching crashed');
       }
 
-      if (response.matchFound && response.matchedCustomerId) {
-        const found = customers.find(c => c.id === response.matchedCustomerId);
+      const matchedCustomers: MatchedCustomerResult[] = Array.isArray(response.matchedCustomers)
+        ? response.matchedCustomers
+        : [];
+      const detectedFaces: FaceVerificationFace[] = Array.isArray(response.faces) && response.faces.length > 0
+        ? response.faces
+        : matchedCustomers.map((match, faceIndex) => ({
+          faceIndex,
+          matchedCustomerId: match.customerId,
+          matchFound: true,
+          confidenceScore: match.confidenceScore,
+          boundingBox: match.boundingBox
+        }));
+      const results = detectedFaces.map(face => ({
+        ...face,
+        customer: face.matchedCustomerId
+          ? customers.find(customer => customer.id === face.matchedCustomerId) || null
+          : null
+      }));
+      setFaceResults(results);
+
+      const matchedFaces = results.filter(
+        (face): face is FaceScanResult & { customer: Customer } => face.matchFound && face.customer !== null
+      );
+      const uniqueMatchedCustomers = Array.from(new Map(
+        matchedFaces.map(face => [face.customer!.id, face.customer!])
+      ).values());
+      if (uniqueMatchedCustomers.length > 1) {
+        stopCamera();
+        onCustomersSelected(uniqueMatchedCustomers);
+        return;
+      }
+
+      if (matchedFaces.length > 0) {
+        const bestFace = matchedFaces.find(face => face.matchedCustomerId === response.matchedCustomerId) || matchedFaces[0];
+        setMatchedCustomer(bestFace.customer!);
+        setConfidence(bestFace.confidenceScore);
+        setScannerStatus('matched');
+        setScannerMsg(`${matchedFaces.length} customer face${matchedFaces.length === 1 ? '' : 's'} matched. Select a customer below to review their ledger.`);
+        setAwaitingConfirmation(true);
+      } else if (response.matchFound && response.matchedCustomerId) {
+        const found = customers.find(customer => customer.id === response.matchedCustomerId);
         if (found) {
           setMatchedCustomer(found);
           setConfidence(response.confidenceScore);
@@ -295,32 +358,49 @@ export default function Dashboard({ session, customers, onCustomerSelected, onRe
   // Handle register customer submission
   const handleAddCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newCustName || !newCustPhone) return;
+    const name = newCustName.trim();
+    const phone = newCustPhone.trim();
+    if (!/^[\p{L}\p{M}][\p{L}\p{M} .'-]*$/u.test(name)) {
+      setCustomerSaveError('Enter a name using letters only.');
+      return;
+    }
+    if (!/^\d{11}$/.test(phone)) {
+      setCustomerSaveError('Enter an 11-digit phone number using digits only.');
+      return;
+    }
+
+    setCustomerSaveError('');
+    setIsSavingCustomer(true);
 
     try {
       const res = await fetch('/api/customers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: newCustName,
-          phone: newCustPhone,
+          name,
+          phone,
           address: newCustAddress,
           creditLimit: Number(newCustLimit),
           image: newCustImg // registered face template
         })
       });
 
-      if (res.ok) {
-        setNewCustName('');
-        setNewCustPhone('');
-        setNewCustAddress('');
-        setNewCustImg('');
-        setShowAddForm(false);
-        stopRegCamera();
-        onRefreshData();
+      const response = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(response.error || `Customer registration failed (HTTP ${res.status}).`);
       }
+
+      setNewCustName('');
+      setNewCustPhone('');
+      setNewCustAddress('');
+      setNewCustImg('');
+      setShowAddForm(false);
+      stopRegCamera();
+      onRefreshData();
     } catch (error) {
-      console.error('Failed to append customer', error);
+      setCustomerSaveError(error instanceof Error ? error.message : 'Could not save customer. Please try again.');
+    } finally {
+      setIsSavingCustomer(false);
     }
   };
 
@@ -383,12 +463,37 @@ export default function Dashboard({ session, customers, onCustomerSelected, onRe
           {/* Video Feed Monitor viewport */}
           <div className="w-full aspect-[4/3] bg-slate-950/90 rounded-2xl border border-white/5 relative overflow-hidden flex flex-col items-center justify-center">
             {cameraActive ? (
-              <video
-                ref={videoRef}
-                playsInline
-                muted
-                className="w-full h-full object-cover scale-x-[-1]"
-              />
+              <>
+                <video
+                  ref={videoRef}
+                  playsInline
+                  muted
+                  className="w-full h-full object-cover scale-x-[-1]"
+                />
+                {faceResults.map(face => {
+                  const [x, y, width, height] = face.boundingBox;
+                  const frameWidth = videoRef.current?.videoWidth || 400;
+                  const frameHeight = videoRef.current?.videoHeight || 300;
+                  const isMatched = face.matchFound && face.customer;
+
+                  return (
+                    <div
+                      key={face.faceIndex}
+                      className={`absolute border-2 ${isMatched ? 'border-emerald-400' : 'border-rose-400'}`}
+                      style={{
+                        left: `${((frameWidth - x - width) / frameWidth) * 100}%`,
+                        top: `${(y / frameHeight) * 100}%`,
+                        width: `${(width / frameWidth) * 100}%`,
+                        height: `${(height / frameHeight) * 100}%`
+                      }}
+                    >
+                      <span className={`absolute -top-5 left-0 max-w-full truncate px-1 text-[9px] font-bold text-white ${isMatched ? 'bg-emerald-600' : 'bg-rose-600'}`}>
+                        {isMatched ? `${face.customer?.name} (${face.confidenceScore}%)` : 'Unknown'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </>
             ) : (
               <div className="flex flex-col items-center p-4 text-center space-y-2">
                 <CameraOff className="w-10 h-10 text-slate-600 animate-pulse" />
@@ -458,6 +563,31 @@ export default function Dashboard({ session, customers, onCustomerSelected, onRe
                       Open Profile
                     </button>
                   )}
+                </div>
+              )}
+
+              {faceResults.some(face => face.matchFound && face.customer) && (
+                <div className="grid grid-cols-1 gap-2 pt-2">
+                  {faceResults.filter(face => face.matchFound && face.customer).map(face => (
+                    <button
+                      key={face.faceIndex}
+                      type="button"
+                      onClick={() => {
+                        setMatchedCustomer(face.customer!);
+                        setConfidence(face.confidenceScore);
+                        setAwaitingConfirmation(true);
+                      }}
+                      className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${matchedCustomer?.id === face.customer?.id ? 'border-emerald-400/60 bg-emerald-950/30' : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]'}`}
+                    >
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="truncate font-bold text-white">{face.customer?.name}</span>
+                        <span className="shrink-0 text-emerald-300">{face.confidenceScore}%</span>
+                      </span>
+                      <span className="block text-slate-400">Phone: {face.customer?.phone}</span>
+                      <span className="block text-slate-400">Credit limit: Rs. {face.customer?.creditLimit.toLocaleString('en-PK')}</span>
+                      <span className="block text-rose-300">Balance: Rs. {face.customer?.balance.toLocaleString('en-PK')}</span>
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
@@ -547,12 +677,7 @@ export default function Dashboard({ session, customers, onCustomerSelected, onRe
                     required
                     placeholder="e.g. Karan Dev"
                     value={newCustName}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (/^[a-zA-Z\s]*$/.test(val)) {
-                        setNewCustName(val);
-                      }
-                    }}
+                    onChange={(e) => setNewCustName(e.target.value.replace(/[^\p{L}\p{M} .'-]/gu, ''))}
                     className="w-full bg-[#111936] border border-white/5 focus:border-blue-500 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
                   />
                 </div>
@@ -560,16 +685,15 @@ export default function Dashboard({ session, customers, onCustomerSelected, onRe
                 <div>
                   <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">WhatsApp Hotline*</label>
                   <input
-                    type="text"
+                    type="tel"
                     required
-                    placeholder="e.g. +92 300 1234567"
+                    inputMode="numeric"
+                    pattern="[0-9]{11}"
+                    minLength={11}
+                    maxLength={11}
+                    placeholder="e.g. 03001234567"
                     value={newCustPhone}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (/^[+0-9\s]*$/.test(val)) {
-                        setNewCustPhone(val);
-                      }
-                    }}
+                    onChange={(e) => setNewCustPhone(e.target.value.replace(/\D/g, '').slice(0, 11))}
                     className="w-full bg-[#111936] border border-white/5 focus:border-blue-500 rounded-xl px-3 py-2 text-xs text-white focus:outline-none"
                   />
                 </div>
@@ -675,6 +799,12 @@ export default function Dashboard({ session, customers, onCustomerSelected, onRe
                 )}
               </div>
 
+              {customerSaveError && (
+                <p role="alert" className="rounded-lg border border-rose-500/30 bg-rose-950/30 px-3 py-2 text-xs text-rose-300">
+                  {customerSaveError}
+                </p>
+              )}
+
               <div className="flex justify-end gap-2 pt-1">
                 <button
                   type="button"
@@ -688,9 +818,10 @@ export default function Dashboard({ session, customers, onCustomerSelected, onRe
                 </button>
                 <button
                   type="submit"
-                  className="px-4.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold"
+                  disabled={isSavingCustomer}
+                  className="px-4.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold disabled:cursor-wait disabled:opacity-60"
                 >
-                  Secure Registry
+                  {isSavingCustomer ? 'Saving...' : 'Secure Registry'}
                 </button>
               </div>
             </form>
