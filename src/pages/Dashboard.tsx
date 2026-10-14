@@ -328,11 +328,14 @@ export default function Dashboard({ session, customers, onCustomerSelected, onCu
     } catch (err: any) {
       clearTimeout(timeoutId);
       const isAbort = err.name === 'AbortError';
-      const message = isAbort ? 'Face verification timed out — retrying shortly.' : (err.message || 'Face comparison adapter connection error.');
+      const message = isAbort
+        ? 'Face recognition service is not responding. Start the Python service and click Retry.'
+        : (err.message || 'Face comparison adapter connection error.');
       if (/quota|rate limit|exceeded|429/i.test(message)) {
         setVerificationBlocked(true);
       }
-      setScannerStatus(isAbort ? 'idle' : 'error');
+      // Always stop the auto-scan loop on any error — user must click Retry
+      setScannerStatus('error');
       setScannerMsg(message);
     }
   };
@@ -360,7 +363,7 @@ export default function Dashboard({ session, customers, onCustomerSelected, onCu
     e.preventDefault();
     const name = newCustName.trim();
     const phone = newCustPhone.trim();
-    if (!/^[\p{L}\p{M}][\p{L}\p{M} .'-]*$/u.test(name)) {
+     if (!/^[\p{L}\p{M}][\p{L}\p{M} .'-]*$/u.test(name)) {
       setCustomerSaveError('Enter a name using letters only.');
       return;
     }

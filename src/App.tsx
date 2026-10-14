@@ -10,13 +10,28 @@ import AdminPanel from './pages/AdminPanel';
 import { Customer, UserSession } from './types';
 
 const THEME_STORAGE_KEY = 'smart-khata-theme';
+const SESSION_USER_KEY = 'smart_khata_session_user';
+const SESSION_TOKEN_KEY = 'smart_khata_session_token';
 
 export default function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>(() =>
     typeof window !== 'undefined' && window.localStorage.getItem(THEME_STORAGE_KEY) === 'light' ? 'light' : 'dark'
   );
-  const [view, setView] = useState<'landing' | 'dashboard' | 'profile' | 'multi-profile' | 'reports' | 'admin'>('landing');
-  const [user, setUser] = useState<UserSession | null>(null);
+  const [user, setUser] = useState<UserSession | null>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = window.localStorage.getItem(SESSION_USER_KEY);
+      if (saved) {
+        try { return JSON.parse(saved); } catch {}
+      }
+    }
+    return null;
+  });
+  const [view, setView] = useState<'landing' | 'dashboard' | 'profile' | 'multi-profile' | 'reports' | 'admin'>(() => {
+    if (typeof window !== 'undefined' && window.localStorage.getItem(SESSION_USER_KEY)) {
+      return 'dashboard';
+    }
+    return 'landing';
+  });
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [selectedCustomers, setSelectedCustomers] = useState<Customer[]>([]);
@@ -28,8 +43,19 @@ export default function App() {
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
 
-  const setAuthenticatedUser = (session: UserSession | null, nextView: 'dashboard' | 'landing' = 'dashboard') => {
+  const setAuthenticatedUser = (
+    session: UserSession | null,
+    nextView: 'dashboard' | 'landing' = 'dashboard',
+    token?: string
+  ) => {
     setUser(session);
+    if (session) {
+      window.localStorage.setItem(SESSION_USER_KEY, JSON.stringify(session));
+      if (token) window.localStorage.setItem(SESSION_TOKEN_KEY, token);
+    } else {
+      window.localStorage.removeItem(SESSION_USER_KEY);
+      window.localStorage.removeItem(SESSION_TOKEN_KEY);
+    }
     setCustomers([]);
     setSelectedCustomer(null);
     setSelectedCustomers([]);
@@ -45,14 +71,18 @@ export default function App() {
 
       const status = await res.json();
       if (status.user) {
-        setAuthenticatedUser(status.user, 'dashboard');
+        setUser(status.user);
+        window.localStorage.setItem(SESSION_USER_KEY, JSON.stringify(status.user));
+        setView(currentView => currentView === 'landing' ? 'dashboard' : currentView);
         await refreshCustomers();
       } else {
         setAuthenticatedUser(null, 'landing');
       }
     } catch (err) {
       console.error('Connection to backend failed:', err);
-      setAuthenticatedUser(null, 'landing');
+      if (!window.localStorage.getItem(SESSION_USER_KEY)) {
+        setAuthenticatedUser(null, 'landing');
+      }
     }
   };
 
@@ -82,6 +112,9 @@ export default function App() {
 
   useEffect(() => {
     checkSessionAndLoadData();
+    if (user) {
+      refreshCustomers();
+    }
   }, []);
 
   const handleLogout = async () => {
@@ -141,8 +174,8 @@ export default function App() {
         >
           <ArrowLeft className="w-4 h-4" /> Landing Page
         </button>
-        <Auth onAuthSuccess={(session) => {
-          setAuthenticatedUser(session, 'dashboard');
+        <Auth onAuthSuccess={(session, token) => {
+          setAuthenticatedUser(session, 'dashboard', token);
           refreshCustomers();
         }} />
       </div>

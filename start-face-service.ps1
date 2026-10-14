@@ -7,7 +7,7 @@ function Test-PortListening([int]$port) {
 
 function Stop-PortProcess([int]$port) {
   $pids = @(Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue |
-    Select-Object -ExpandProperty OwnershipProcess -Unique)
+    Select-Object -ExpandProperty OwningProcess -Unique)
 
   if (-not $pids -or $pids.Count -eq 0) {
     return $false
@@ -30,7 +30,7 @@ function Stop-PortProcess([int]$port) {
 if (Test-PortListening 8001) { Stop-PortProcess 8001 }
 Start-Sleep -Seconds 1
 if (Test-PortListening 8001) {
-  $pids = @(Get-NetTCPConnection -LocalPort 8001 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwnershipProcess -Unique)
+  $pids = @(Get-NetTCPConnection -LocalPort 8001 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
   throw "Port 8001 is still in use by PID(s): $($pids -join ', '). Close the conflicting process before starting the face service."
 }
 

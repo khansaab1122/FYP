@@ -174,8 +174,8 @@ const PASSWORD_RESET_RESEND_MS = 60 * 1000;
 const PASSWORD_RESET_MAX_ATTEMPTS = 5;
 const OWNER_SETUP_TOKEN = process.env.SMART_KHATA_OWNER_SETUP_TOKEN || '';
 const AUTH_COOKIE_NAME = 'smart_khata_session';
-const AUTH_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
-const MAX_AUTH_SESSIONS = 20;
+const AUTH_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days for persistent login
+const MAX_AUTH_SESSIONS = 50;
 const SMTP_HOST = process.env.SMTP_HOST || '';
 const SMTP_PORT = Number(process.env.SMTP_PORT) || 587;
 const SMTP_SECURE = process.env.SMTP_SECURE === 'true' || SMTP_PORT === 465;
@@ -222,14 +222,19 @@ function safeStringEqual(left: string, right: string): boolean {
 }
 
 function getSessionToken(req: express.Request): string | null {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice(7).trim();
+    if (token) return token;
+  }
   const cookie = req.headers.cookie?.split(';').map(value => value.trim())
     .find(value => value.startsWith(`${AUTH_COOKIE_NAME}=`));
   return cookie ? cookie.slice(AUTH_COOKIE_NAME.length + 1) : null;
 }
 
-function setSessionCookie(res: express.Response, token: string): void {
+function setSessionCookie(res: express.Response, token: string, ttlMs: number = AUTH_SESSION_TTL_MS): void {
   const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
-  res.setHeader('Set-Cookie', `${AUTH_COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${AUTH_SESSION_TTL_MS / 1000}${secure}`);
+  res.setHeader('Set-Cookie', `${AUTH_COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${Math.floor(ttlMs / 1000)}${secure}`);
 }
 
 function clearSessionCookie(res: express.Response): void {
@@ -247,17 +252,19 @@ function findAuthSession(req: express.Request, db: DbSchema): AuthSessionRecord 
     && safeStringEqual(session.tokenHash, tokenHash));
 }
 
-async function createAuthSession(db: DbSchema, user: UserSession, res: express.Response): Promise<void> {
+async function createAuthSession(db: DbSchema, user: UserSession, res: express.Response, rememberMe: boolean = true): Promise<string> {
   const now = Date.now();
+  const ttl = rememberMe ? AUTH_SESSION_TTL_MS : 24 * 60 * 60 * 1000;
   db.sessions = db.sessions.filter(session => session.expiresAt > now).slice(-(MAX_AUTH_SESSIONS - 1));
   const token = randomBytes(32).toString('base64url');
   db.sessions.push({
     tokenHash: createHash('sha256').update(token).digest('hex'),
     user,
-    expiresAt: now + AUTH_SESSION_TTL_MS
+    expiresAt: now + ttl
   });
   await writeDb(db);
-  setSessionCookie(res, token);
+  setSessionCookie(res, token, ttl);
+  return token;
 }
 
 async function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction): Promise<void> {
@@ -341,7 +348,7 @@ async function performPythonFaceMatch(capturedImage: string, candidates: Custome
 /* --- API ROUTES --- */
 
 app.post('/api/auth/login', async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, rememberMe } = req.body;
   const db = await readDb();
 
   if (typeof email !== 'string' || typeof password !== 'string' || !email.trim()
@@ -372,8 +379,8 @@ app.post('/api/auth/login', async (req, res) => {
     businessName: db.profile.name,
     role: 'owner'
   };
-  await createAuthSession(db, user, res);
-  return res.json({ message: 'Success', user });
+  const token = await createAuthSession(db, user, res, rememberMe !== false);
+  return res.json({ message: 'Success', user, token });
 });
 
 app.get('/api/auth/google/config', (_req, res) => {
@@ -412,8 +419,8 @@ app.post('/api/auth/google', async (req, res) => {
       businessName: db.profile.name,
       role: 'owner'
     };
-    await createAuthSession(db, user, res);
-    return res.json({ message: 'Success', user });
+    const token = await createAuthSession(db, user, res, true);
+    return res.json({ message: 'Success', user, token });
   } catch {
     return res.status(401).json({ error: 'Google sign-in failed. Please try again.' });
   }
@@ -454,8 +461,8 @@ app.post('/api/auth/register', async (req, res) => {
     businessName: businessName.trim(),
     role: 'owner'
   };
-  await createAuthSession(db, user, res);
-  return res.json({ message: 'Account successfully registered and logged in', user });
+  const token = await createAuthSession(db, user, res, true);
+  return res.json({ message: 'Account successfully registered and logged in', user, token });
 });
 
 app.post('/api/auth/initialize-password', async (req, res) => {
@@ -484,8 +491,8 @@ app.post('/api/auth/initialize-password', async (req, res) => {
     businessName: db.profile.name,
     role: 'owner'
   };
-  await createAuthSession(db, user, res);
-  return res.json({ message: 'Password set successfully', user });
+  const token = await createAuthSession(db, user, res, true);
+  return res.json({ message: 'Password set successfully', user, token });
 });
 
 app.post('/api/auth/forgot-password', async (req, res) => {
@@ -619,9 +626,12 @@ app.post('/api/customers', async (req, res) => {
   res.json(newCustomer);
 });
 
-app.put('/api/customers/:id', async (req, res) => {
+const updateCustomerHandler = async (req: express.Request, res: express.Response) => {
   const { id } = req.params;
   const { name, phone, address, image, creditLimit } = req.body;
+  if (name !== undefined && (typeof name !== 'string' || !/^[\p{L}\p{M}][\p{L}\p{M} .'-]*$/u.test(name.trim()))) {
+    return res.status(400).json({ error: 'Customer name must contain letters only.' });
+  }
   if (phone !== undefined && (typeof phone !== 'string' || !/^\d{11}$/.test(phone))) {
     return res.status(400).json({ error: 'Phone number must contain exactly 11 digits.' });
   }
@@ -634,8 +644,8 @@ app.put('/api/customers/:id', async (req, res) => {
 
   db.customers[custIndex] = {
     ...db.customers[custIndex],
-    name: name !== undefined ? name : db.customers[custIndex].name,
-    phone: phone !== undefined ? phone : db.customers[custIndex].phone,
+    name: name !== undefined ? name.trim() : db.customers[custIndex].name,
+    phone: phone !== undefined ? phone.trim() : db.customers[custIndex].phone,
     address: address !== undefined ? address : db.customers[custIndex].address,
     image: image !== undefined ? image : db.customers[custIndex].image,
     creditLimit: creditLimit !== undefined ? Number(creditLimit) : db.customers[custIndex].creditLimit,
@@ -643,7 +653,10 @@ app.put('/api/customers/:id', async (req, res) => {
 
   await writeDb(db);
   res.json(db.customers[custIndex]);
-});
+};
+
+app.put('/api/customers/:id', updateCustomerHandler);
+app.patch('/api/customers/:id', updateCustomerHandler);
 
 app.delete('/api/customers/:id', async (req, res) => {
   const { id } = req.params;

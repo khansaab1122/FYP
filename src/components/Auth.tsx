@@ -5,7 +5,7 @@ import { motion } from 'motion/react';
 import { UserSession } from '../types';
 
 interface AuthProps {
-  onAuthSuccess: (session: UserSession) => void;
+  onAuthSuccess: (session: UserSession, token?: string) => void;
 }
 
 interface GoogleCredentialResponse {
@@ -29,6 +29,8 @@ export default function Auth({ onAuthSuccess }: AuthProps) {
   
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [rememberCredentials, setRememberCredentials] = useState(true);
+  const [hasSavedCredentials, setHasSavedCredentials] = useState(false);
   const [resetCode, setResetCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [setupToken, setSetupToken] = useState('');
@@ -44,6 +46,38 @@ export default function Auth({ onAuthSuccess }: AuthProps) {
   const googleButtonRef = useRef<HTMLDivElement>(null);
   const onAuthSuccessRef = useRef(onAuthSuccess);
   onAuthSuccessRef.current = onAuthSuccess;
+
+  // Restore saved credentials from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('smart_khata_saved_credentials');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed.email) setEmail(parsed.email);
+        if (parsed.password) setPassword(parsed.password);
+        setRememberCredentials(true);
+        setHasSavedCredentials(true);
+      } else {
+        const savedEmail = localStorage.getItem('smart_khata_saved_email');
+        if (savedEmail) {
+          setEmail(savedEmail);
+          setRememberCredentials(true);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load saved credentials:', err);
+    }
+  }, []);
+
+  const handleClearSavedCredentials = (e: React.MouseEvent) => {
+    e.preventDefault();
+    localStorage.removeItem('smart_khata_saved_credentials');
+    localStorage.removeItem('smart_khata_saved_email');
+    localStorage.removeItem('smart_khata_remember_credentials');
+    setEmail('');
+    setPassword('');
+    setHasSavedCredentials(false);
+  };
 
   useEffect(() => {
     if (!isLogin || isForgot || isSetupMode) return;
@@ -85,7 +119,11 @@ export default function Auth({ onAuthSuccess }: AuthProps) {
             });
             const data = await response.json();
             if (!response.ok) throw new Error(data.error || 'Google sign-in failed.');
-            onAuthSuccessRef.current(data.user);
+            if (data.token) {
+              localStorage.setItem('smart_khata_session_token', data.token);
+            }
+            localStorage.setItem('smart_khata_session_user', JSON.stringify(data.user));
+            onAuthSuccessRef.current(data.user, data.token);
           } catch (err) {
             setError(err instanceof Error ? err.message : 'Google sign-in failed.');
           } finally {
@@ -157,7 +195,7 @@ export default function Auth({ onAuthSuccess }: AuthProps) {
       const payload = isSetupMode
         ? { email, password, setupToken }
         : isLogin
-          ? { email, password }
+          ? { email, password, rememberMe: rememberCredentials }
           : { name, email, password, businessName, ownerSetupToken };
 
       const res = await fetch(endpoint, {
@@ -176,7 +214,24 @@ export default function Auth({ onAuthSuccess }: AuthProps) {
         throw new Error(data.error || 'Authentication failed');
       }
 
-      onAuthSuccess(data.user);
+      if (rememberCredentials) {
+        localStorage.setItem('smart_khata_saved_credentials', JSON.stringify({ email, password }));
+        localStorage.setItem('smart_khata_saved_email', email);
+        localStorage.setItem('smart_khata_remember_credentials', 'true');
+        setHasSavedCredentials(true);
+      } else {
+        localStorage.removeItem('smart_khata_saved_credentials');
+        localStorage.removeItem('smart_khata_saved_email');
+        localStorage.removeItem('smart_khata_remember_credentials');
+        setHasSavedCredentials(false);
+      }
+
+      if (data.token) {
+        localStorage.setItem('smart_khata_session_token', data.token);
+      }
+      localStorage.setItem('smart_khata_session_user', JSON.stringify(data.user));
+
+      onAuthSuccess(data.user, data.token);
     } catch (err: any) {
       setError(err.message || 'Connecting server failed.');
     } finally {
@@ -314,9 +369,15 @@ export default function Auth({ onAuthSuccess }: AuthProps) {
                   <Mail className="absolute left-3.5 top-3 w-4 h-4 text-slate-500" />
                   <input
                     type="email"
+                    name="email"
+                    id="auth-email"
+                    autoComplete="username email"
                     required
                     value={email}
-                    onChange={(e) => setEmail(e.target.value)}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      if (hasSavedCredentials) setHasSavedCredentials(false);
+                    }}
                     placeholder="owner@store.com"
                     className="input-field with-leading-icon"
                   />
@@ -330,7 +391,7 @@ export default function Auth({ onAuthSuccess }: AuthProps) {
                     <button 
                       type="button" 
                       onClick={() => setIsForgot(true)}
-                      className="text-blue-400 hover:text-blue-300 text-xs font-medium"
+                      className="text-blue-400 hover:text-blue-300 text-xs font-medium cursor-pointer"
                     >
                       Forgot?
                     </button>
@@ -340,16 +401,55 @@ export default function Auth({ onAuthSuccess }: AuthProps) {
                   <Lock className="absolute left-3.5 top-3 w-4 h-4 text-slate-500" />
                   <input
                     type="password"
+                    name="password"
+                    id="auth-password"
+                    autoComplete={isLogin ? "current-password" : "new-password"}
                     required
                     minLength={8}
                     maxLength={128}
                     value={password}
-                    onChange={(e) => setPassword(e.target.value)}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      if (hasSavedCredentials) setHasSavedCredentials(false);
+                    }}
                     placeholder="••••••••"
                     className="input-field with-leading-icon"
                   />
                 </div>
               </div>
+
+              {isLogin && !isSetupMode && (
+                <div className="space-y-2 pt-0.5">
+                  <div className="flex items-center justify-between">
+                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={rememberCredentials}
+                        onChange={(e) => setRememberCredentials(e.target.checked)}
+                        className="w-4 h-4 rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-blue-500 cursor-pointer accent-blue-500"
+                      />
+                      <span className="text-xs text-slate-300 font-medium">
+                        Save login credentials & keep signed in
+                      </span>
+                    </label>
+                    {hasSavedCredentials && (
+                      <button
+                        type="button"
+                        onClick={handleClearSavedCredentials}
+                        className="text-[11px] text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
+                      >
+                        Clear saved
+                      </button>
+                    )}
+                  </div>
+                  {hasSavedCredentials && (
+                    <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-500/10 border border-blue-500/20 text-[11px] text-blue-300">
+                      <Sparkles className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                      <span>Credentials saved on this device (auto-filled).</span>
+                    </div>
+                  )}
+                </div>
+              )}
             </>
           )}
 
